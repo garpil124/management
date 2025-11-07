@@ -1,88 +1,165 @@
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from db.mongo import orders_col, products_col, users_col
-from bson.objectid import ObjectId
+import os
 import datetime
+from bson import ObjectId
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-@Client.on_callback_query(filters.regex(r"^buy:"))
-async def on_buy(client: Client, cq: CallbackQuery):
-    pid = cq.data.split(":",1)[1]
-    try:
-        prod = await products_col.find_one({"_id": ObjectId(pid)})
-    except:
-        return await cq.answer("Produk tidak ditemukan", show_alert=True)
-    if not prod:
-        return await cq.answer("Produk tidak ditemukan", show_alert=True)
+from db.mongo import payments_col, products_col, users_col
+from config import OWNER_ID, LOG_CHAT_ID
+from utils.helpers import send_log
 
-    # create order
-    order = {
-        "user_id": cq.from_user.id,
-        "product_id": pid,
-        "amount": prod['price'],
-        "status": "pending",
-        "payment_method": None,
-        "payment_proof": None,
-        "created_at": datetime.datetime.utcnow()
-    }
-    res = await orders_col.insert_one(order)
-    oid = str(res.inserted_id)
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔷 QRIS (Upload Bukti)", callback_data=f"pay:upload:{oid}")],
-        [InlineKeyboardButton("🏧 Dana / GoPay (Transfer)", callback_data=f"pay:transfer:{oid}")],
-        [InlineKeyboardButton("❌ Batal", callback_data=f"pay:cancel:{oid}")]
-    ])
-    await cq.message.answer(f"📋 Order dibuat: <b>{prod['name']}</b>\nJumlah: Rp{prod['price']}\nOrder ID: <code>{oid}</code>", reply_markup=kb, parse_mode="html")
-    await cq.answer()
+def register_payment(app: Client):
 
-@Client.on_callback_query(filters.regex(r"^pay:upload:"))
-async def pay_upload_cb(client: Client, cq: CallbackQuery):
-    _, _, oid = cq.data.split(":")
-    await cq.message.answer("Silahkan upload foto bukti pembayaran sebagai balasan (reply) ke pesan ini, lalu gunakan /confirm <ORDER_ID> pada pesan balasan foto.")
-    await cq.answer()
-
-@Client.on_callback_query(filters.regex(r"^pay:transfer:"))
-async def pay_transfer_cb(client: Client, cq: CallbackQuery):
-    _, _, oid = cq.data.split(":")
-    # show transfer details - owner must set PAYMENT_QRIS_* in config or .env
-    from config import PAYMENT_QRIS_DANA, PAYMENT_QRIS_GOPAY
-    text = "Silahkan transfer ke salah satu:\n"
-    if PAYMENT_QRIS_DANA:
-        text += f"• Dana: {PAYMENT_QRIS_DANA}\n"
-    if PAYMENT_QRIS_GOPAY:
-        text += f"• GoPay: {PAYMENT_QRIS_GOPAY}\n\nSetelah transfer, upload bukti dan gunakan /confirm {oid}"
-    await cq.message.answer(text)
-    await cq.answer()
-
-@Client.on_message(filters.command("confirm") & filters.private)
-async def confirm_payment(client: Client, message: Message):
-    """
-    User should reply to their uploaded photo with /confirm <order_id>
-    """
-    try:
-        parts = message.text.split()
-        if len(parts) < 2:
-            return await message.reply("Usage: reply to your photo with /confirm <ORDER_ID>")
-
-        oid = parts[1]
-        # get replied message
+    # ─────────────────────────────────
+    # ✅ ADMIN: Set QR
+    # /setqr dana <reply photo>
+    # /setqr gopay <reply photo>
+    # ─────────────────────────────────
+    @app.on_message(filters.command("setqr") & filters.user(OWNER_ID))
+    async def set_qr(client, message):
         if not message.reply_to_message or not message.reply_to_message.photo:
-            return await message.reply("❌ Reply ke pesan yang berisi foto bukti pembayaran.")
+            return await message.reply("❌ Reply ke gambar QR nya.")
 
-        # download photo
-        fpath = await message.reply_to_message.download(file_name=f"uploads/proof_{message.from_user.id}_{oid}.jpg")
-        # update order
-        await orders_col.update_one({"_id": ObjectId(oid)}, {"$set": {"payment_proof": fpath, "status": "paid", "paid_at": datetime.datetime.utcnow()}})
-        # give premium if product is premium (optional logic)
-        ord_doc = await orders_col.find_one({"_id": ObjectId(oid)})
-        prod = await products_col.find_one({"_id": ObjectId(ord_doc['product_id'])})
-        # if product name contains 'premium' then give premium
-        if 'premium' in prod.get('name','').lower():
-            until = datetime.datetime.utcnow() + datetime.timedelta(days=30)
-            await users_col.update_one({"user_id": ord_doc['user_id']}, {"$set": {"is_premium": True, "premium_until": until}}, upsert=True)
+        args = message.text.split()
+        if len(args) < 2:
+            return await message.reply("Format: /setqr <dana|gopay>")
 
-await message.reply("✅ Pembayaran diterima. Premium aktif 30 hari.")
-        else:
-            await message.reply("✅ Pembayaran diterima. Terima kasih.")
-    except Exception as e:
-        await message.reply(f"❌ Error: {e}")
+        payment_name = args[1].lower()
+        if payment_name not in ["dana", "gopay"]:
+            return await message.reply("❌ Hanya dana / gopay.")
+
+        file_path = await message.reply_to_message.download(
+            file_name=os.path.join(UPLOAD_FOLDER, f"qr_{payment_name}.jpg")
+        )
+
+        await payments_col.update_one(
+            {"name": payment_name},
+            {"$set": {"qr_path": file_path, "updated_at": datetime.datetime.utcnow()}},
+            upsert=True
+        )
+
+        await message.reply(f"✅ QR {payment_name.upper()} berhasil disimpan!")
+
+    # ─────────────────────────────────
+    # ✅ USER: Beli Produk
+    # /buy <product_id>
+    # ─────────────────────────────────
+    @app.on_message(filters.command("buy"))
+    async def buy_product(client, message):
+        args = message.text.split()
+        if len(args) < 2:
+            return await message.reply("Format: /buy <product_id>")
+
+        pid = args[1]
+        prod = await products_col.find_one({"_id": ObjectId(pid)})
+
+        if not prod:
+            return await message.reply("❌ Produk tidak ditemukan.")
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 Dana", callback_data=f"pay_dana_{pid}")],
+            [InlineKeyboardButton("💰 Gopay", callback_data=f"pay_gopay_{pid}")]
+        ])
+
+        await message.reply(
+            f"🛒 **{prod['name']}**\n💵 Harga: {prod['price']}\n\nPilih metode bayar:",
+            reply_markup=kb
+        )
+
+    # ─────────────────────────────────
+    # ✅ CALLBACK: Pilih Metode
+    # ─────────────────────────────────
+    @app.on_callback_query(filters.regex("^pay_(dana|gopay)_(.*)"))
+    async def pay_cb(client, callback):
+        method, pid = callback.data.split("_")[1], callback.data.split("_")[2]
+        pm = await payments_col.find_one({"name": method})
+
+        if not pm or "qr_path" not in pm:
+            return await callback.answer("❌ QR belum diset admin!", show_alert=True)
+
+        prod = await products_col.find_one({"_id": ObjectId(pid)})
+        if not prod:
+            return await callback.answer("❌ Produk hilang!", show_alert=True)
+
+        order = {
+            "user_id": callback.from_user.id,
+            "product_id": ObjectId(pid),
+            "price": prod["price"],
+            "method": method,
+            "status": "waiting_payment",
+            "created_at": datetime.datetime.utcnow()
+        }
+
+        ins = await payments_col.insert_one(order)
+
+        caption = (
+            f"📌 **Order ID:** `{ins.inserted_id}`\n"
+            f"📦 Produk: {prod['name']}\n"
+            f"💵 Harga: {prod['price']}\n"
+            f"🏦 Metode: {method.upper()}\n\n"
+            f"📸 Silakan transfer lalu kirim bukti foto dengan reply:\n"
+            f"`/confirm {ins.inserted_id}`"
+        )
+
+        await client.send_photo(
+            chat_id=callback.message.chat.id,
+            photo=pm["qr_path"],
+            caption=caption
+        )
+
+        await callback.answer()
+
+    # ─────────────────────────────────
+    # ✅ USER: Upload bukti bayar
+    # reply foto +:  /confirm <order_id>
+    # ─────────────────────────────────
+    @app.on_message(filters.command("confirm"))
+    async def confirm_pay(client, message):
+        try:
+            args = message.text.split()
+            if len(args) < 2:
+                return await message.reply("Format: reply foto → /confirm <order_id>")
+
+            oid = args[1]
+
+            if not message.reply_to_message or not message.reply_to_message.photo:
+                return await message.reply("❌ Reply ke foto bukti pembayaran.")
+
+            file_path = await message.reply_to_message.download(
+                file_name=os.path.join(UPLOAD_FOLDER, f"proof_{message.from_user.id}_{oid}.jpg")
+            )
+
+            await payments_col.update_one(
+                {"_id": ObjectId(oid)},
+                {"$set": {"proof": file_path, "status": "paid", "paid_at": datetime.datetime.utcnow()}}
+            )
+
+            order = await payments_col.find_one({"_id": ObjectId(oid)})
+            prod  = await products_col.find_one({"_id": ObjectId(order["product_id"])})
+
+            # Kalau produk premium -> kasih akses 30 hari
+            if "premium" in prod.get("name", "").lower():
+                until = datetime.datetime.utcnow() + datetime.timedelta(days=30)
+                await users_col.update_one(
+                    {"user_id": order["user_id"]},
+                    {"$set": {"is_premium": True, "premium_until": until}},
+                    upsert=True
+                )
+
+            try:
+                await message.reply("✅ Pembayaran diterima. Premium aktif 30 hari!")
+            except:
+                pass
+
+            # Kirim log ke owner
+            await send_log(
+                client,
+                LOG_CHAT_ID,
+                f"💰 *Pembayaran masuk*\nUser: {order['user_id']}\nProduct: {prod['name']}\nOrder: `{oid}`"
+            )
+
+        except Exception as err:
+            await message.reply(f"⚠️ Gagal memproses pembayaran:\n`{err}`")
