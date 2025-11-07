@@ -1,0 +1,39 @@
+# Environment
+.env
+env/
+venv/
+.venv/
+
+# Python cache
+pycache/
+*.pyc
+*.pyo
+*.pyd
+.cache/
+
+# Logs
+*.log
+logs/
+log/
+*.logs
+
+# Database (local, if any)
+*.db
+*.sqlite3
+
+# IDE / Editor settings
+.vscode/
+.idea/
+.DS_Store
+
+# OS junk
+Thumbs.db
+
+# Python build
+build/
+dist/
+*.egg-info/
+
+# Sessions (Pyrogram)
+*.session
+*.session-journal
