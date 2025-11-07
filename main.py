@@ -1,89 +1,63 @@
-import asyncio
-import logging
+# main.py
 import sys
-from pyrogram import Client
+import logging
+import asyncio
+from pyrogram import Client, errors
+from config import API_ID, API_HASH, BOT_TOKEN, MONGO_URI, LOGGER_ID
+from db.connector import connect_db
+from utils.logger import logger
 
-from config import (
-    BOT_TOKEN, API_ID, API_HASH,
-    OWNER_ID, CREATOR_NAME, LOG_CHAT_ID,
-    MONGO_URI, DB_NAME
-)
+# Biar handler auto ke-load
+import handlers  # noqa
 
-from db.mongo import connect_db, get_db
-from utils.scheduler import start_scheduler
-from utils.backup import start_auto_backup
+async def main():
+    logger.info("🚀 Starting bot...")
 
-# Import handler modules biar kebaca Pyrogram
-import handlers.help
-import handlers.owner
-import handlers.subowner
-import handlers.catalog
-import handlers.payment
-import handlers.premium
+    # connect database
+    try:
+        await connect_db(MONGO_URI)
+        logger.info("✅ MongoDB Connected")
+    except Exception as e:
+        logger.critical(f"❌ MongoDB Failed: {e}")
+        sys.exit(1)
 
-# Logging biar keliatan enak
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger("ManagerBot")
+    # start pyrogram bot
+    app = Client(
+        "garfield_store_bot",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        bot_token=BOT_TOKEN,
+        workers=20
+    )
 
+    try:
+        await app.start()
+        me = await app.get_me()
+        logger.info(f"✅ Bot started as @{me.username} ({me.id})")
 
-async def on_start():
-    """Jalan saat bot hidup"""
-    logger.info("🚀 BOT SEDANG START...")
+        if LOGGER_ID:
+            try:
+                await app.send_message(LOGGER_ID, f"✅ Bot Online: @{me.username}")
+            except errors.RPCError as e:
+                logger.warning(f"⚠ Cannot send log to LOGGER_ID: {e}")
 
-    # 1) Connect MongoDB
-    await connect_db(MONGO_URI, DB_NAME)
-    db = get_db()
-    logger.info("✅ MongoDB Connected!")
+        await idle()
 
-    # 2) Start scheduler
-    start_scheduler()
-    logger.info("✅ Scheduler Running!")
+    except Exception as e:
+        logger.critical(f"🔥 Fatal error start bot: {e}")
+        sys.exit(1)
 
-    # 3) Start auto backup
-    start_auto_backup()
-    logger.info("✅ Auto Backup Active!")
-
-    # 4) Kirim notifikasi ke log chat
-    if LOG_CHAT_ID:
-        try:
-            await app.send_message(
-                LOG_CHAT_ID,
-                f"🤖 BOT RUNNING\n"
-                f"👑 Owner: {OWNER_ID}\n"
-                f"🧠 Creator: {CREATOR_NAME}"
-            )
-        except:
-            logger.warning("⚠️ Gagal kirim ke LOG_CHAT_ID")
-
-    logger.info("🔥 SEMUA MODULE SIAP. BOT LIVE!")
+    await app.stop()
+    logger.info("🛑 Bot Stopped.")
 
 
-async def on_stop():
-    logger.info("🛑 Bot berhenti...")
-
-
-# Setup Pyrogram Client
-app = Client(
-    name="ManagerBot",
-    bot_token=BOT_TOKEN,
-    api_id=API_ID,
-    api_hash=API_HASH,
-    plugins=dict(root="handlers")  # <- otomatis load semua handler
-)
-
-app.on_startup(on_start)
-app.on_shutdown(on_stop)
-
+from pyrogram import idle
 
 if name == "main":
     try:
-        logger.info("▶ Bot running...")
-        app.run()
-    except KeyboardInterrupt:
-        logger.info("⏹ Bot dimatiin manual.")
+        asyncio.get_event_loop().run_until_complete(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("🟡 Bot stopped manually")
     except Exception as e:
-        logger.critical(f"💀 BOT CRASH: {e}", exc_info=True)
+        logger.critical(f"🔥 Unexpected crash: {e}")
+        sys.exit(1)
