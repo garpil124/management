@@ -1,39 +1,38 @@
-# Environment
+# Env & Secrets
 .env
-env/
+.env.local
+.env.production
+
+# Python
+pycache/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
 venv/
+ENV/
+env/
 .venv/
 
-# Python cache
-pycache/
-*.pyc
-*.pyo
-*.pyd
-.cache/
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS Files
+.DS_Store
+Thumbs.db
 
 # Logs
 *.log
-logs/
-log/
-*.logs
 
-# Database (local, if any)
-*.db
+# Database local (jaga2)
 *.sqlite3
 
-# IDE / Editor settings
-.vscode/
-.idea/
-.DS_Store
+# Backup zip
+backups/
+*.zip
 
-# OS junk
-Thumbs.db
-
-# Python build
-build/
-dist/
-*.egg-info/
-
-# Sessions (Pyrogram)
-*.session
-*.session-journal
+# QR payment images (kalo lo ga mau ke push)
+qr/
