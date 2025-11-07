@@ -9,3 +9,5 @@ pytz
 aiohttp
 requests
 uvloop
+qrcode
+pillow
