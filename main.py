@@ -1,84 +1,95 @@
-import asyncio
-import logging
 import sys
+import logging
+import asyncio
+from pyrogram import Client
+from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
+import os
 
+# Load ENV dulu
 load_dotenv()
 
-from pyrogram import Client
-from config import API_ID, API_HASH, BOT_TOKEN, MONGO_URI
-from db.mongo import init_mongo
-
-# Import handlers
-from handlers.start import start_handler
-from handlers.help import help_handler
-from handlers.owner import owner_handler
-from handlers.subowner import subowner_handler
-from handlers.tagall import tagall_handler
-from handlers.product import product_handler
-from handlers.payment import payment_handler
-
-# Import utils
-from utils.scheduler import run_scheduler
-from utils.backup import auto_backup
-
-# Logging setup
+# Logging setup biar debug enak
 logging.basicConfig(
     level=logging.INFO,
-    format="[%(asctime)s] [%(levelname)s] %(name)s -> %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
+    format="[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
 )
-log = logging.getLogger("MAIN")
+logger = logging.getLogger("ManagementBot")
 
-# Pyrogram Client
-bot = Client(
-    "ManagementBot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    workers=4
+# ENV
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+MONGO_URI = os.getenv("MONGO_URI")
+CREATOR_NAME = os.getenv("CREATOR_NAME", "Unknown")
+
+if not BOT_TOKEN or not MONGO_URI:
+    logger.critical("❌ BOT_TOKEN atau MONGO_URI belum di set di .env")
+    sys.exit(1)
+
+# Init bot main
+app = Client(
+    "management_bot",
+    bot_token=BOT_TOKEN
 )
 
-async def register_handlers():
-    log.info("🔁 Registering handlers...")
+# MongoDB
+mongodb = AsyncIOMotorClient(MONGO_URI)
+db = mongodb["management_bot"]
 
-    bot.add_handler(start_handler)
-    bot.add_handler(help_handler)
-    bot.add_handler(owner_handler)
-    bot.add_handler(subowner_handler)
-    bot.add_handler(tagall_handler)
-    bot.add_handler(product_handler)
-    bot.add_handler(payment_handler)
+async def init_database():
+    try:
+        # Test ping biar yakin connect
+        await mongodb.admin.command("ping")
+        logger.info("✅ MongoDB connected successfully")
+    except Exception as e:
+        logger.critical(f"❌ MongoDB gagal connect: {e}")
+        sys.exit(1)
 
-    log.info("✅ All handlers registered!")
+# Auto load handlers biar gak import satu-satu manual
+def load_handlers():
+    import glob, importlib
+    files = glob.glob("handlers/*.py")
+    for file in files:
+        name = file.replace("/", ".").replace("\\", ".").replace(".py", "")
+        if "init" not in name:
+            importlib.import_module(name)
+            logger.info(f"📌 Handler loaded: {name}")
 
-async def start_services():
-    log.info("🚀 Starting services...")
+async def start_scheduler():
+    try:
+        from utils.scheduler import start_scheduler
+        await start_scheduler()
+        logger.info("✅ Scheduler started")
+    except Exception as e:
+        logger.warning(f"⚠️ Scheduler error: {e}")
 
-    # Connect Mongo
-    await init_mongo(MONGO_URI)
-
-    # Load handlers
-    await register_handlers()
-
-    # Start scheduler
-    asyncio.create_task(run_scheduler())
-
-    # Start auto backup
-    asyncio.create_task(auto_backup())
-
-    log.info("🔥 All services started!")
+async def start_auto_backup():
+    try:
+        from utils.backup import auto_backup
+        asyncio.create_task(auto_backup())
+        logger.info("✅ Auto backup task running")
+    except Exception as e:
+        logger.warning(f"⚠️ Auto backup error: {e}")
 
 async def main():
-    async with bot:
-        await start_services()
-        log.info("🤖 Bot is running...")
-        await asyncio.Event().wait()
+    logger.info("🚀 Bot starting...")
+
+    await init_database()
+    load_handlers()
+    await start_scheduler()
+    await start_auto_backup()
+
+    await app.start()
+    me = await app.get_me()
+    logger.info(f"🤖 Bot aktif: {me.first_name} (@{me.username})")
+    logger.info(f"👑 Creator: {CREATOR_NAME}")
+    logger.info("✅ Bot siap digunakan!")
+
+    await idle()
+
+from pyrogram import idle
 
 if name == "main":
     try:
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        log.warning("🛑 Bot stopped manually")
-    except Exception as err:
-        log.critical(f"💀 Fatal error: {err}")
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot dimatikan manual")
