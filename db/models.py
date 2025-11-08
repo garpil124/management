@@ -1,21 +1,22 @@
-from db.mongo import users_col, payments_col, products_col
+# Simple helpers for collection access
+from db.connector import get_db
 
-# User
-async def add_user(user_id, data):
-    return await users_col.update_one(
-        {"_id": user_id}, {"$set": data}, upsert=True
-    )
 
-async def get_user(user_id):
-    return await users_col.find_one({"_id": user_id})
+def bots_col():
+    db = get_db()
+    return db.bots if db else None
 
-# Payments
-async def create_payment(payment_data):
-    return await payments_col.insert_one(payment_data)
 
-# Products
-async def add_product(prod):
-    return await products_col.insert_one(prod)
+def subowners_col():
+    db = get_db()
+    return db.subowners if db else None
 
-async def list_products():
-    return await products_col.find({}).to_list(50)
+
+def products_col():
+    db = get_db()
+    return db.products if db else None
+
+
+def orders_col():
+    db = get_db()
+    return db.orders if db else None
