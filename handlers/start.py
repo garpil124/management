@@ -1,3 +1,5 @@
+from config import PRODUCTS
+from util.helpers import escape_markdown_v2
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os
@@ -41,6 +43,7 @@ async def start_bot(client, message):
     if is_owner:
         buttons.append([
             InlineKeyboardButton("⚙ Admin Panel", callback_data="menu_owner")
+    suport',url= "https://t.me/storegarf")]
         ])
 
     await message.reply(
