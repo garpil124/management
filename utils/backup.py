@@ -1,30 +1,34 @@
 import os
 import zipfile
 from pathlib import Path
-from utils.time import now_wib_str
 from db.mongo import backups_col
+from datetime import datetime
+from config import BACKUP_FOLDER
 
-BACKUP_ROOT = Path(os.getenv("BACKUP_FOLDER", "backups"))
-BACKUP_ROOT.mkdir(exist_ok=True)
+BACKUP_ROOT = Path(BACKUP_FOLDER or "backups")
+BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
 
-def create_backup(src_paths, prefix="backup"):
-    timestamp = now_wib_str().replace(" ", "_").replace(":", "-")
-    filename = f"{prefix}_{timestamp}.zip"
-    output = BACKUP_ROOT / filename
+def create_backup_zip(src_paths, prefix="backup"):
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    name = f"{prefix}_{ts}.zip"
+    dest = BACKUP_ROOT / name
+    with zipfile.ZipFile(dest, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for p in src_paths:
+            p = Path(p)
+            if p.is_dir():
+                for f in p.rglob('*'):
+                    if f.is_file():
+                        zf.write(f, arcname=f.relative_to(p.parent))
+            elif p.is_file():
+                zf.write(p, arcname=p.name)
+    backups_col.insert_one({'file': str(dest), 'created_at': ts})
+    return str(dest)
 
-    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as z:
-        for src in src_paths:
-            src = Path(src)
-            if src.is_dir():
-                for file in src.rglob("*"):
-                    if file.is_file():
-                        z.write(file, file.relative_to(src.parent))
-            elif src.is_file():
-                z.write(src, src.name)
-
-    backups_col.insert_one({
-        "file": str(output),
-        "created_at": timestamp
-    })
-
-    return str(output)
+# simple coroutine starter for scheduled task (call with asyncio.create_task)
+async def start_auto_backup():
+    # minimal immediate backup once and return; scheduler handles periodic
+    try:
+        create_backup_zip(['./', 'db/'], prefix='init_backup')
+        print("✅ Auto backup created")
+    except Exception as e:
+        print("backup error:", e)
