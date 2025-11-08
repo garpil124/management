@@ -1,83 +1,104 @@
-import datetime
+import os, datetime
 from bson import ObjectId
-from pyrogram import Client, filters
-from database import orders_col, products_col, users_col  # pastikan sudah ada
-from config import LOG_CHANNEL_ID, LOG_GROUP_ID  # optional kalau mau lewat config
+from bot import app
+from pyrogram import filters
+from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from db.mongo import orders_col, products_col, users_col, payments_col
+from utils.helpers import send_log_all, safe_send
 
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-async def send_log(app: Client, text: str):
-    """Kirim log ke channel & ke grup owner"""
+@app.on_callback_query(filters.regex(r"^buy:"))
+async def on_buy(client, cq: CallbackQuery):
+    pid = cq.data.split(":",1)[1]
     try:
-        await app.send_message(-1003242217013, text)  # LOG CHANNEL
-    except:
-        pass
+        prod = await products_col.find_one({"_id": ObjectId(pid)}) if hasattr(products_col, "find_one") else products_col.find_one({"_id": pid})
+    except Exception:
+        prod = None
+    if not prod:
+        return await cq.answer("Produk tidak ditemukan", show_alert=True)
+
+    order = {
+        "user_id": cq.from_user.id,
+        "product_id": str(prod.get("_id") if prod.get("_id") else pid),
+        "amount": prod.get("price", 0),
+        "status": "pending",
+        "payment_proof": None,
+        "created_at": datetime.datetime.utcnow()
+    }
+    # insert (motor async or pymongo sync)
+    if getattr(orders_col, "insert_one", None) and asyncio.iscoroutinefunction(orders_col.insert_one):
+        res = await orders_col.insert_one(order)
+        oid = str(res.inserted_id)
+    else:
+        # sync insert
+        res = orders_col.insert_one(order)
+        oid = str(res.inserted_id)
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔷 Upload Bukti (QRIS)", callback_data=f"pay:upload:{oid}")],
+        [InlineKeyboardButton("🏧 Transfer (Dana/GoPay)", callback_data=f"pay:transfer:{oid}")],
+        [InlineKeyboardButton("❌ Batal", callback_data=f"pay:cancel:{oid}")]
+    ])
+
+    await cq.message.answer(
+        f"📋 Order dibuat: <b>{prod.get('name')}</b>\nJumlah: Rp{prod.get('price')}\nOrder ID: <code>{oid}</code>",
+        reply_markup=kb,
+        parse_mode="html"
+    )
+    await send_log_all(client, f"🆕 ORDER — user={cq.from_user.id} order={oid} prod={prod.get('name')}")
+    await cq.answer()
+
+
+@app.on_callback_query(filters.regex(r"^pay:upload:"))
+async def pay_upload_cb(client, cq: CallbackQuery):
+    _, _, oid = cq.data.split(":")
+    await cq.message.answer(f"Silakan upload foto bukti dan reply ke foto lalu ketik /confirm {oid}", parse_mode="markdown")
+    await cq.answer()
+
+
+@app.on_message(filters.command("confirm") & filters.private)
+async def confirm_payment(client, message: Message):
     try:
-        await app.send_message(-1003236389657, text)  # LOG GROUP
-    except:
-        pass
-
-
-async def register_payment(app: Client):
-    @app.on_message(filters.command("confirm"))
-    async def confirm_payment(_, message):
         parts = message.text.split()
         if len(parts) < 2:
-            return await message.reply("⚠️ Usage: /confirm <ORDER_ID>")
-
+            return await message.reply("⚠️ Usage (reply foto) -> /confirm <ORDER_ID>")
         oid = parts[1]
-
-        # Harus reply foto
+        # check reply photo
         if not message.reply_to_message or not message.reply_to_message.photo:
-            return await message.reply("❌ Reply ke pesan yang berisi foto bukti pembayaran!")
+            return await message.reply("❌ Reply ke foto bukti pembayaran.")
+        # download
+        fpath = await message.reply_to_message.download(file_name=os.path.join(UPLOAD_DIR, f"proof_{message.from_user.id}_{oid}.jpg"))
 
-        # Download foto
-        fpath = await message.reply_to_message.download(
-            file_name=f"uploads/proof_{message.from_user.id}_{oid}.jpg"
-        )
-
-        try:
-            # Update order jadi paid & simpan bukti
-            await orders_col.update_one(
-                {"_id": ObjectId(oid)},
-                {"$set": {
-                    "payment_proof": fpath,
-                    "status": "paid",
-                    "paid_at": datetime.datetime.utcnow()
-                }}
-            )
-
+        # update order -> support motor/pymongo
+        if getattr(orders_col, "update_one", None) and asyncio.iscoroutinefunction(orders_col.update_one):
+            await orders_col.update_one({"_id": ObjectId(oid)}, {"$set": {"payment_proof": fpath, "status": "paid", "paid_at": datetime.datetime.utcnow()}})
             ord_doc = await orders_col.find_one({"_id": ObjectId(oid)})
-            if not ord_doc:
-                return await message.reply("❌ Order tidak ditemukan di database!")
+        else:
+            orders_col.update_one({"_id": ObjectId(oid)}, {"$set": {"payment_proof": fpath, "status": "paid", "paid_at": datetime.datetime.utcnow()}})
+            ord_doc = orders_col.find_one({"_id": ObjectId(oid)})
 
-            prod = await products_col.find_one({"_id": ObjectId(ord_doc["product_id"])})
-            if not prod:
-                return await message.reply("❌ Produk tidak ditemukan di database!")
+        if not ord_doc:
+            return await message.reply("❌ Order tidak ditemukan setelah update.")
+        # product
+        prod = products_col.find_one({"_id": ObjectId(ord_doc.get("product_id"))}) if not asyncio.iscoroutinefunction(products_col.find_one) else await products_col.find_one({"_id": ObjectId(ord_doc.get("product_id"))})
 
-            # Jika premium -> aktif 30 hari
-            if "premium" in prod.get("name", "").lower():
-                until = datetime.datetime.utcnow() + datetime.timedelta(days=30)
-                await users_col.update_one(
-                    {"user_id": ord_doc["user_id"]},
-                    {"$set": {"is_premium": True, "premium_until": until}},
-                    upsert=True
-                )
+if not prod:
+            return await message.reply("❌ Produk tidak ditemukan.")
+        # premium check
+        if "premium" in prod.get("name","").lower():
+            until = datetime.datetime.utcnow() + datetime.timedelta(days=30)
+            if getattr(users_col, "update_one", None) and asyncio.iscoroutinefunction(users_col.update_one):
+                await users_col.update_one({"user_id": ord_doc.get("user_id")}, {"$set": {"is_premium": True, "premium_until": until}}, upsert=True)
+            else:
+                users_col.update_one({"user_id": ord_doc.get("user_id")}, {"$set": {"is_premium": True, "premium_until": until}}, upsert=True)
 
-            # Reply ke user
-            await message.reply("✅ Pembayaran diterima. Premium aktif 30 hari 🎉")
-
-            # Kirim log
-            log_text = f"""
-✅ **PAYMENT CONFIRMED**
-👤 User ID : `{message.from_user.id}`
-🛒 Order ID : `{oid}`
-📦 Produk : `{prod.get('name')}`
-💎 Status : Premium 30 hari aktif
-📎 Bukti : `{fpath}`
-⏰ Waktu : `{datetime.datetime.utcnow()}` UTC
-"""
-            await send_log(app, log_text)
-
-        except Exception as err:
-            await message.reply(f"⚠️ Gagal memproses pembayaran.\nError: {err}")
-            await send_log(app, f"❌ PAYMENT FAIL\nOrder: `{oid}`\nError: `{err}`")
+        await message.reply("✅ Pembayaran diterima. Premium aktif 30 hari.")
+        await send_log_all(client, f"✅ PAYMENT SUCCESS\nUser:{ord_doc.get('user_id')}\nOrder:{oid}\nProd:{prod.get('name')}")
+    except Exception as err:
+        try:
+            await message.reply(f"⚠️ Gagal memproses pembayaran.\n{err}")
+        except:
+            pass
+        await send_log_all(client, f"❌ ERROR /confirm: {err}")
