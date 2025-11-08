@@ -72,7 +72,7 @@ async def main():
         sys.exit(1)
 
 # ===== Program Entry Point =====
-if name == "main":
+if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
