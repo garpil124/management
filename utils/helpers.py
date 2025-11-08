@@ -1,27 +1,28 @@
-from pyrogram import Client
+import asyncio
 from typing import Optional
+from pyrogram import Client
+import config
 
-async def safe_send(
-    client: Client,
-    chat_id: int,
-    text: str,
-    reply_markup=None,
-    disable_web_page_preview: Optional[bool] = True
-):
+async def safe_send(client: Client, chat_id: int, text: str, **kwargs):
     try:
-        return await client.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=reply_markup,
-            disable_web_page_preview=disable_web_page_preview
-        )
+        return await client.send_message(chat_id, text, **kwargs)
     except Exception as e:
-        print(f"[SAFE_SEND ERROR] {e}")
-        return None
+        # gentle retry
+        try:
+            await asyncio.sleep(1)
+            return await client.send_message(chat_id, text, **kwargs)
+        except Exception:
+            print("safe_send failed:", e)
+            return None
 
-
-def human_readable(size: int) -> str:
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if size < 1024:
-            return f"{size:.2f} {unit}"
-        size /= 1024
+async def send_log_all(client: Client, text: str, parse_mode: Optional[str] = "html"):
+    if config.LOG_CHANNEL_ID:
+        try:
+            await safe_send(client, config.LOG_CHANNEL_ID, text, parse_mode=parse_mode)
+        except Exception as e:
+            print("send_log_all channel error:", e)
+    if config.LOG_GROUP_ID:
+        try:
+            await safe_send(client, config.LOG_GROUP_ID, text, parse_mode=parse_mode)
+        except Exception as e:
+            print("send_log_all group error:", e)
