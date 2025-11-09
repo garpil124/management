@@ -1,74 +1,88 @@
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from config import OWNER_ID
+from db.mongo import subowners_col, users_col, products_col  # pastikan collection ini ada
+from datetime import datetime
 
-# ===== KEYBOARD DEFINITIONS =====
+# ================= KEYBOARDS ================= #
 
-def owner_kb():
+def owner_panel_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👥 List Partner", callback_data="owner:list_partners")],
-        [InlineKeyboardButton("⭐ Premium List", callback_data="owner:list_premium")],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="owner:broadcast")],
+        [InlineKeyboardButton("🧠 List User", callback_data="owner:list_user")],
+        [InlineKeyboardButton("👥 List Sub-Owner", callback_data="owner:list_sub")],
+        [InlineKeyboardButton("➕ Add Sub-Owner", callback_data="owner:add_sub")],
+        [InlineKeyboardButton("⭐ List Premium", callback_data="owner:list_premium")],
+        [InlineKeyboardButton("🛍 Kelola Produk", callback_data="owner:menu_produk")],
+        [InlineKeyboardButton("📊 Statistik Bot", callback_data="owner:statistic")],
+        [InlineKeyboardButton("⚙ Setting Bot Owner", callback_data="owner:setting")],
+        [InlineKeyboardButton("🔻 Shutdown / Restart Bot", callback_data="owner:shutdown")],
         [InlineKeyboardButton("🔙 Back", callback_data="menu:back")]
     ])
 
-def premium_kb():
+def produk_owner_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💰 Bayar (QRIS)", callback_data="pay:qris")],
-        [InlineKeyboardButton("💳 Bayar (DANA)", callback_data="pay:dana")],
-        [InlineKeyboardButton("🔙 Back", callback_data="menu:back")]
+        [InlineKeyboardButton("➕ Tambah Produk", callback_data="owner:add_product")],
+        [InlineKeyboardButton("📝 Edit Produk", callback_data="owner:edit_product")],
+        [InlineKeyboardButton("🗑 Hapus Produk", callback_data="owner:del_product")],
+        [InlineKeyboardButton("📃 List Produk", callback_data="owner:list_product")],
+        [InlineKeyboardButton("🔙 Back", callback_data="owner:back_panel")]
     ])
 
-def main_kb():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🛍 Produk", callback_data="menu_product"),
-            InlineKeyboardButton("💳 Payment", callback_data="menu_payment"),
-        ],
-        [
-            InlineKeyboardButton("⭐ Premium", callback_data="premium:info"),
-            InlineKeyboardButton("📘 Bantuan", callback_data="menu_help"),
-        ],
-        [InlineKeyboardButton("👥 Support", url="https://t.me/storegarf")],
-    ])
+# ================= CALLBACK HANDLER ================= #
 
-# ===== CALLBACK HANDLER =====
+@Client.on_callback_query(filters.regex("^owner:"))
+async def owner_callback(client: Client, cb: CallbackQuery):
 
-@Client.on_callback_query()
-async def cb_handler(client: Client, cb: CallbackQuery):
+    if cb.from_user.id != OWNER_ID:
+        return await cb.answer("⛔ Bukan akses kamu!", show_alert=True)
 
     data = cb.data
 
-    # ===== MENU OWNER CALLBACK =====
-    if data == "menu_owner":
-        if cb.from_user.id != OWNER_ID:
-            return await cb.answer("⛔️ Bukan akses kamu!", show_alert=True)
-
-        txt = "👑 *Owner Control Panel*\n\nPilih menu di bawah:"
-        await cb.message.edit_text(txt, reply_markup=owner_kb())
-
-    # ===== PREMIUM MENU =====
-    elif data == "menu_premium":
-        txt = (
-            "⭐️ *Premium User Plan* ⭐️\n\n"
-            "⏳ Durasi : 30 Hari\n"
-            "⚡ Benefit :\n"
-            "• Akses semua fitur premium\n"
-            "• Limit lebih besar\n"
-            "• Support prioritas\n\n"
-            "Klik tombol di bawah untuk beli!"
-        )
-        await cb.message.edit_text(txt, reply_markup=premium_kb())
-
-    # ===== PAYMENT CONFIRM =====
-    elif data.startswith("pay:"):
-        method = data.split(":")[1].upper()
+    # PANEL UTAMA OWNER
+    if data == "owner:panel":
         await cb.message.edit_text(
-            f"💳 Kamu memilih metode pembayaran: {method}\n\n"
-            "Silakan kirim bukti pembayaran (foto/screenshot)."
+            "👑 **OWNER PANEL**\n────────────────",
+            reply_markup=owner_panel_kb()
         )
 
-    # ===== BACK MENU =====
-    elif data == "menu:back":
-        await cb.message.edit_text("🔙 *Kembali ke menu utama*", reply_markup=main_kb())
+    # LIST SUB OWNER
+    if data == "owner:list_sub":
+        subs = await subowners_col.find().to_list(None)
+        if not subs:
+            return await cb.answer("Belum ada sub-owner!", show_alert=True)
+
+        teks = "👥 **LIST SUB-OWNER**\n\n"
+        for s in subs:
+            teks += f"• `{s['user_id']}` — until {s['expired']}\n"
+
+        await cb.message.edit_text(teks, reply_markup=owner_panel_kb())
+
+    # ADD SUB OWNER (trigger bot untuk meminta input username/ID)
+    if data == "owner:add_sub":
+        await cb.message.edit_text(
+            "Kirim @username atau ID telegram user yang akan dijadikan **Sub-Owner 30 hari**"
+        )
+        # bot akan menunggu input → nanti kita buat di message handler next
+
+    # MENU KELOLA PRODUK
+    if data == "owner:menu_produk":
+        await cb.message.edit_text("🛍 **KELOLA PRODUK**", reply_markup=produk_owner_kb())
+
+    # LIST PRODUK
+    if data == "owner:list_product":
+        prods = await products_col.find().to_list(None)
+        if not prods:
+            return await cb.answer("Produk masih kosong!", show_alert=True)
+
+        txt = "📃 **DAFTAR PRODUK**\n\n"
+        for p in prods:
+            txt += f"• {p['name']} — Rp{p['price']}\n"
+
+        await cb.message.edit_text(txt, reply_markup=produk_owner_kb())
+
+    # BACK KE PANEL OWNER
+    if data == "owner:back_panel":
+        await cb.message.edit_text("👑 **OWNER PANEL**", reply_markup=owner_panel_kb())
 
     await cb.answer()
