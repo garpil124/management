@@ -1,61 +1,121 @@
-from pyrogram import filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from util.helpers import escape_markdown_v2
-from config import PRODUCTS
-import logging
-
-logger = logging.getLogger('product')
+from pyrogram import Client, filters
+from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from db.mongo import products_col
+from datetime import datetime
 
 
-def register_product(app):
+def register_product(app: Client):
 
-    @app.on_callback_query(filters.regex(r'^product_'))
-    async def show_product_detail(client, callback: CallbackQuery):
-        try:
-            code = callback.data.split('product_', 1)[1]
-            product = next((p for p in PRODUCTS if p['code'] == code), None)
-            if not product:
-                await callback.answer('Produk tidak ditemukan.', show_alert=True)
-                return
+    # ────────────────────────────────────────────────
+    # COMMAND /produk (user mengetik manual)
+    # ────────────────────────────────────────────────
+    @app.on_message(filters.command("produk") & filters.private)
+    async def cmd_produk(client: Client, message: Message):
 
-            # Build MarkdownV2-safe text
-            name = escape_markdown_v2(product.get('name'))
-            price = escape_markdown_v2(product.get('price'))
-            code_s = escape_markdown_v2(product.get('code'))
-            desc = escape_markdown_v2(product.get('desc', 'Tidak ada deskripsi.'))
+        data = list(products_col.find().sort("created_at", -1).limit(50))
 
-            text = (
-                f"🧾 *Tagihan Premium*\n\n"
-                f"📌 *Produk:* {name}\n"
-                f"💳 *Harga:* Rp{price}\n"
-                f"🆔 *Kode:* {code_s}\n\n"
-                f"{desc}\n\n"
-                "✅ Tekan tombol di bawah untuk melanjutkan pembayaran."
+        # → kalau produk kosong
+        if not data:
+            await message.reply(
+                "📦 Belum ada produk tersedia.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("➕ Tambah Produk", callback_data="add_product")]]
+                )
+            )
+            return
+
+        teks = "<b>📦 Daftar Produk</b>\n\n"
+        for p in data:
+            teks += (
+                f"• <b>{p['name']}</b>\n"
+                f"  💰 Rp{p['price']}\n"
+                f"  🆔 <code>{p['code']}</code>\n\n"
             )
 
-            buttons = InlineKeyboardMarkup([
-                [InlineKeyboardButton('✅ Konfirmasi Pembayaran', callback_data=f'confirm_{code_s}')],
-                [InlineKeyboardButton('⬅ Kembali', callback_data='menu_produk')]
-            ])
-
-            await callback.message.edit_text(text, reply_markup=buttons, parse_mode='MarkdownV2')
-            await callback.answer()
-        except Exception as e:
-            logger.exception('show_product_detail error: %s', e)
-            await callback.answer('⚠️ Gagal menampilkan detail.', show_alert=True)
-
-    @app.on_callback_query(filters.regex(r'^confirm_'))
-    async def confirm_product_cb(client, callback: CallbackQuery):
-        try:
-            code = callback.data.split('confirm_', 1)[1]
-            text = (
-                "🔔 *Instruksi Pembayaran*\n\n"
-                "Silakan transfer / bayar sesuai instruksi yang telah disediakan.\n\n"
-                "Setelah membayar, upload bukti (foto) lalu gunakan perintah:\n"
-                "/confirm <ORDER_ID>\n\nOrder ID dibuat setelah proses pembelian."
+        await message.reply(
+            teks,
+            parse_mode="html",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("➕ Tambah Produk", callback_data="add_product")]]
             )
-            await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅ Kembali', callback_data='menu_produk')]]), parse_mode='MarkdownV2')
-            await callback.answer()
-        except Exception as e:
-            logger.exception('confirm_product_cb error: %s', e)
-            await callback.answer('⚠️ Gagal menampilkan instruksi.', show_alert=True)
+        )
+
+    # ────────────────────────────────────────────────
+    # CALLBACK BUTTON: tombol "📦 Produk" di menu start
+    # ────────────────────────────────────────────────
+    @app.on_callback_query(filters.regex("^menu_produk$"))
+    async def cb_menu_produk(client: Client, callback: CallbackQuery):
+
+        data = list(products_col.find().sort("created_at", -1).limit(50))
+
+        # → Kalau produk masih kosong
+        if not data:
+            await callback.message.edit_text(
+                "📦 Belum ada produk tersedia.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("➕ Tambah Produk", callback_data="add_product")]]
+                )
+            )
+            return
+
+        teks = "<b>📦 Daftar Produk</b>\n\n"
+        for p in data:
+            teks += (
+                f"• <b>{p['name']}</b>\n"
+                f"  💰 Rp{p['price']}\n"
+                f"  🆔 <code>{p['code']}</code>\n\n"
+            )
+
+        await callback.message.edit_text(
+            teks,
+            parse_mode="html",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("➕ Tambah Produk", callback_data="add_product")]]
+            )
+        )
+        await callback.answer()
+
+    # ────────────────────────────────────────────────
+    # CALLBACK: tambah produk (owner only)
+    # ────────────────────────────────────────────────
+    @app.on_callback_query(filters.regex("^add_product$"))
+    async def cb_add_product(client: Client, callback: CallbackQuery):
+
+        await callback.message.edit_text(
+            "🆕 <b>Tambah Produk Baru</b>\n\n"
+            "Format kirim data seperti ini:\n"
+            "<code>nama_produk | harga | kode</code>\n\n"
+            "Contoh:\n"
+            "<code>Premium 30 Hari | 15000 | P30</code>",
+            parse_mode="html"
+        )
+
+        app.add_handler(waiting_product_handler)
+
+
+# ────────────────────────────────────────────────────────────────
+# Handler untuk menerima input data produk setelah user klik ADD
+# ────────────────────────────────────────────────────────────────
+
+async def waiting_product_handler(client: Client, message: Message):
+
+    try:
+        name, price, code = [x.strip() for x in message.text.split("|")]
+    except:
+        await message.reply("❌ Format salah. Gunakan format:\nNama | Harga | Kode", parse_mode="markdown")
+        return
+
+    products_col.insert_one({
+        "name": name,
+        "price": int(price),
+        "code": code,
+        "created_at": datetime.now()
+    })
+
+await message.reply(
+        f"✅ Produk berhasil ditambahkan!\n\n"
+        f"• <b>{name}</b>\n"
+        f"💰 Rp{price}\n"
+        f"🆔 <code>{code}</code>",
+        parse_mode="html"
+    )
