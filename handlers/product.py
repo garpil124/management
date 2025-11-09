@@ -1,17 +1,3 @@
-# handlers/product.py
-"""
-Product handler (per-owner catalogs)
-Features:
- - /produk (command) => list products (paginated)
- - menu_product (callback) => list products (callback menu)
- - product_<code> (callback) => show product detail + owner actions
- - add_product (callback) => start add-product flow (owner/subowner)
- - edit_product:<code> (callback) => start edit flow (owner only for their items)
- - delete_product:<code> (callback) => delete product (owner only for their items)
- - While user is in "waiting" state, bot will parse a single message as product data:
-     Format: Nama Produk | Harga | Kode | Deskripsi
-"""
-
 from pyrogram import Client, filters
 from pyrogram.types import (
     CallbackQuery,
