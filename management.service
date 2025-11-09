@@ -1,0 +1,14 @@
+[Unit]
+Description=ManagementBot
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/management
+ExecStart=/root/management/venv/bin/python3 /root/management/main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
