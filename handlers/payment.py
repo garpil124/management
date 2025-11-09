@@ -1,5 +1,3 @@
-GARFIELD:
-GNU nano 8.4                                                                                                                                                                                                                                             handlers/payment.py                                                                                                                                                                                                                                                      
 import os, datetime
 from bson import ObjectId
 from bot import app
