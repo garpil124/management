@@ -8,6 +8,7 @@ from .payment import register_payment
 from .callback import register_callback_handlers
 from . import tagall_admin
 from .callback import register_callback_handlers
+
 def register_all_handlers(app):
     # order matters: callback registration first so callbacks resolve
     register_callback_handlers(app)
