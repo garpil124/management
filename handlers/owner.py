@@ -1,11 +1,10 @@
-
-    import asyncio
+import asyncio
 from datetime import datetime, timedelta
 
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from config import OWNER_ID
+from config import OWNER_ID  # <-- sekarang harus list
 from db.mongo import partners_col, users_col
 
 # --------------------------------------
@@ -157,7 +156,7 @@ async def run_bc(c, m):
         await m.reply(f"✅ Broadcast selesai\n✔ Terkirim: {sent}\n❌ Gagal: {fail}")
 
 # --------------------------------------
-# OWNER STORE (template)
+# OWNER STORE
 @Client.on_callback_query(filters.regex("^owner_store$") & filters.user(OWNER_ID))
 async def owner_store(c, q):
     await q.message.edit_text("🛍 Menu Owner Store (coming soon)")
