@@ -1,9 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta
-
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-
 from config import OWNER_ID  # <-- sekarang harus list
 from db.mongo import partners_col, users_col
 
