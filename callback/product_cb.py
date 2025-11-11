@@ -1,5 +1,3 @@
-# management/callback/product_cb.py
-
 from pyrogram import Client, filters
 from pyrogram.types import (
     CallbackQuery,
